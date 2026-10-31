@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face Recognition Attendance System (IP Cameras)</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<style>
+  body { background:#f1f4f9; }
+  .navbar-brand { font-weight:700; }
+  .card { border:0; box-shadow:0 2px 10px rgba(0,0,0,.06); border-radius:12px; }
+  .stage { position:relative; background:#111; border-radius:10px; overflow:hidden; aspect-ratio:16/9; width:100%; }
+  .stage .media, .stage canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  .stage .ph { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; color:#8a94a3; text-align:center; padding:1rem; }
+  .stat { font-size:2rem; font-weight:700; }
+  .thumb { width:56px; height:56px; object-fit:cover; border-radius:50%; border:2px solid #dee2e6; }
+  #loader { position:fixed; inset:0; background:rgba(255,255,255,.93); z-index:2000; display:flex; align-items:center; justify-content:center; flex-direction:column; text-align:center; padding:1rem; }
+  .log-item { border-left:4px solid #198754; }
+  .log-item.late { border-left-color:#ffc107; }
+  .url-mask { font-family:monospace; font-size:.8rem; word-break:break-all; }
+  @media print { .no-print, .navbar, .nav-tabs { display:none !important; } body { background:#fff; } }
+</style>
+</head>
+<body>
+
+<div id="loader">
+  <div class="spinner-border text-primary mb-3" style="width:3rem;height:3rem"></div>
+  <div id="loaderText" class="fw-semibold">Loading face recognition models…</div>
+</div>
+
+<nav class="navbar navbar-dark bg-primary no-print">
+  <div class="container-fluid px-3">
+    <span class="navbar-brand"><i class="bi bi-camera-reels me-2"></i>Face Attendance — IP Cameras</span>
+    <span class="text-white-50 small" id="clock"></span>
+  </div>
+</nav>
+
+<div class="container-fluid px-3 py-3">
+
+  <ul class="nav nav-tabs mb-3 no-print" id="tabs">
+    <li class="nav-item"><button class="nav-link active" data-tab="tabAttendance"><i class="bi bi-person-check me-1"></i>Attendance</button></li>
+    <li class="nav-item"><button class="nav-link" data-tab="tabCameras"><i class="bi bi-camera-video me-1"></i>Cameras</button></li>
+    <li class="nav-item"><button class="nav-link" data-tab="tabRegister"><i class="bi bi-person-plus me-1"></i>Register</button></li>
+    <li class="nav-item"><button class="nav-link" data-tab="tabStudents"><i class="bi bi-people me-1"></i>Students</button></li>
+    <li class="nav-item"><button class="nav-link" data-tab="tabRecords"><i class="bi bi-table me-1"></i>Records</button></li>
+    <li class="nav-item"><button class="nav-link" data-tab="tabSettings"><i class="bi bi-gear me-1"></i>Settings</button></li>
+  </ul>
+
+  <!-- ===== ATTENDANCE ===== -->
+  <div class="tab-pane-x" id="tabAttendance">
+    <div class="row g-3">
+      <div class="col-xl-9">
+        <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
+          <button class="btn btn-success" id="btnStartAtt"><i class="bi bi-play-fill"></i> Start all cameras</button>
+          <button class="btn btn-outline-danger" id="btnStopAtt" disabled><i class="bi bi-stop-fill"></i> Stop</button>
+          <span class="text-muted small" id="attStatus">Add cameras in the Cameras tab, register students, then start.</span>
+        </div>
+        <div class="row g-2" id="camGrid">
+          <div class="col-12"><div class="card p-3"><div class="stage"><div class="ph"><i class="bi bi-camera-video-off fs-1"></i><div>Scanner is off</div></div></div></div></div>
+        </div>
+      </div>
+      <div class="col-xl-3">
+        <div class="row g-2 mb-3">
+          <div class="col-4"><div class="card p-2 text-center"><div class="stat text-primary" id="stTotal">0</div><div class="small text-muted">Students</div></div></div>
+          <div class="col-4"><div class="card p-2 text-center"><div class="stat text-success" id="stPresent">0</div><div class="small text-muted">Present</div></div></div>
+          <div class="col-4"><div class="card p-2 text-center"><div class="stat text-danger" id="stAbsent">0</div><div class="small text-muted">Absent</div></div></div>
+        </div>
+        <div class="card p-3">
+          <h6 class="mb-2">Today's check-ins</h6>
+          <div id="todayLog" style="max-height:480px;overflow:auto"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== CAMERAS ===== -->
+  <div class="tab-pane-x d-none" id="tabCameras">
+    <div class="row g-3">
+      <div class="col-lg-4">
+        <div class="card p-3">
+          <h6 id="camFormTitle">Add camera</h6>
+          <input type="hidden" id="cId">
+          <div class="mb-2"><label class="form-label small">Camera name / location *</label><input class="form-control" id="cName" placeholder="e.g. Main Gate"></div>
+          <div class="mb-2">
+            <label class="form-label small">Source type</label>
+            <select class="form-select" id="cType">
+              <option value="mjpeg">IP camera — MJPEG stream (http)</option>
+              <option value="snapshot">IP camera — JPEG snapshot URL (polled)</option>
+              <option value="hls">IP camera — HLS stream (.m3u8)</option>
+              <option value="webcam">Local USB / laptop webcam</option>
+            </select>
+          </div>
+          <div class="mb-2" id="cUrlWrap"><label class="form-label small">Stream URL *</label><input class="form-control" id="cUrl" placeholder="http://192.168.1.50:1984/api/stream.mjpeg?src=gate1"><div class="form-text" id="cUrlHint"></div></div>
+          <div class="mb-2 d-none" id="cIntWrap"><label class="form-label small">Snapshot interval (ms)</label><input type="number" class="form-control" id="cInterval" value="1000" min="300" step="100"></div>
+          <div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" id="cEnabled" checked><label class="form-check-label small" for="cEnabled">Use this camera for attendance</label></div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-primary flex-grow-1" id="btnSaveCam"><i class="bi bi-save"></i> Save camera</button>
+            <button class="btn btn-outline-secondary" id="btnCancelCam">Clear</button>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-8">
+        <div class="card p-3 mb-3">
+          <h6>Configured cameras (<span id="camCount">0</span>)</h6>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+              <thead><tr><th>Name</th><th>Type</th><th>URL</th><th>On</th><th></th></tr></thead>
+              <tbody id="camBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card p-3 mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="m-0">Test preview</h6>
+            <div><span class="badge text-bg-secondary" id="testBadge">idle</span> <button class="btn btn-sm btn-outline-secondary" id="btnStopTest">Stop</button></div>
+          </div>
+          <div class="stage" id="testStage"><div class="ph">Press “Test” on a camera</div></div>
+        </div>
+        <div class="card p-3">
+          <h6>Connecting RTSP cameras (read this)</h6>
+          <p class="small mb-2">Browsers cannot play <code>rtsp://</code> directly, and cannot read a camera’s pixels unless the camera/gateway allows it (CORS). Most school CCTV (Hikvision, Dahua, CP Plus, etc.) speaks RTSP, so the simplest fix is a free gateway such as <b>go2rtc</b> running on any PC on the same network. It turns RTSP into browser-friendly MJPEG / HLS / JPEG with CORS enabled.</p>
+          <details class="small">
+            <summary>Example go2rtc.yaml</summary>
+<pre class="bg-light p-2 mt-2 small">api:
+  listen: ":1984"
+  origin: "*"          # allow this page to read frames (CORS)
+
+streams:
+  gate1: rtsp://admin:PASSWORD@192.168.1.64:554/Streaming/Channels/102
+  hall2: rtsp://admin:PASSWORD@192.168.1.65:554/cam/realmonitor?channel=1&amp;subtype=1</pre>
+            <div>Then use these URLs in this app (replace <code>SERVER</code> with the gateway PC’s IP):</div>
+            <ul class="mt-1 mb-2">
+              <li>MJPEG: <code>http://SERVER:1984/api/stream.mjpeg?src=gate1</code></li>
+              <li>Snapshot: <code>http://SERVER:1984/api/frame.jpeg?src=gate1</code></li>
+              <li>HLS: <code>http://SERVER:1984/api/stream.m3u8?src=gate1</code></li>
+            </ul>
+            <div class="text-muted">RTSP paths differ by brand/model — check your camera manual. Verify the URL formats in go2rtc’s documentation for your version.</div>
+          </details>
+          <ul class="small mt-3 mb-0">
+            <li><b>Use the sub-stream</b> (about 640×360 to 1280×720). Full-HD/4K main streams are slow to process in a browser.</li>
+            <li><b>Mixed content:</b> if this page is opened from an <code>https://</code> site, the browser blocks <code>http://</code> camera URLs. Open this file from the school PC instead (e.g. <code>python -m http.server 8080</code> then <code>http://localhost:8080/face-attendance-system.html</code>).</li>
+            <li><b>Camera placement:</b> at an entrance, at about eye level, 1–3 m from faces, with even lighting and no strong backlight. Wide CCTV views of a far crowd won’t be accurate.</li>
+            <li>Use <b>Test</b> first. It reports whether the browser is allowed to read pixels (CORS). If it says “blocked”, face detection cannot work on that source.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REGISTER ===== -->
+  <div class="tab-pane-x d-none" id="tabRegister">
+    <div class="row g-3">
+      <div class="col-lg-7">
+        <div class="card p-3">
+          <div class="d-flex gap-2 mb-2 flex-wrap align-items-center">
+            <label class="small mb-0">Capture from:</label>
+            <select class="form-select form-select-sm" style="max-width:260px" id="regSource"></select>
+            <button class="btn btn-sm btn-primary" id="btnStartReg"><i class="bi bi-camera"></i> Start</button>
+            <button class="btn btn-sm btn-outline-secondary" id="btnStopReg" disabled>Stop</button>
+          </div>
+          <div class="stage" id="regStage"><div class="ph"><i class="bi bi-camera-video-off fs-1"></i><div>Camera is off</div></div></div>
+          <div class="d-flex gap-2 justify-content-center mt-3">
+            <button class="btn btn-warning" id="btnCapture" disabled><i class="bi bi-record-circle"></i> Capture sample</button>
+          </div>
+          <div class="text-center mt-2"><span class="badge text-bg-info" id="sampleCount">0 / 5 samples</span></div>
+          <div id="sampleThumbs" class="d-flex gap-2 justify-content-center flex-wrap mt-2"></div>
+          <div class="form-text text-center">Tip: capture from the same IP camera that will mark attendance, at slightly different head angles.</div>
+        </div>
+      </div>
+      <div class="col-lg-5">
+        <div class="card p-3">
+          <h6>Student details</h6>
+          <div class="mb-2"><label class="form-label small">Full name *</label><input class="form-control" id="rName"></div>
+          <div class="mb-2"><label class="form-label small">Roll / ID number *</label><input class="form-control" id="rRoll"></div>
+          <div class="row g-2 mb-3">
+            <div class="col-6"><label class="form-label small">Class</label><input class="form-control" id="rClass" placeholder="e.g. 9th"></div>
+            <div class="col-6"><label class="form-label small">Section</label><input class="form-control" id="rSection" placeholder="e.g. A"></div>
+          </div>
+          <button class="btn btn-success w-100" id="btnSave"><i class="bi bi-save"></i> Save student</button>
+          <div class="form-text mt-2">Only one face should be in view while capturing. At least 3 samples are required.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== STUDENTS ===== -->
+  <div class="tab-pane-x d-none" id="tabStudents">
+    <div class="card p-3">
+      <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+        <h6 class="m-0">Registered students (<span id="studCount">0</span>)</h6>
+        <input class="form-control form-control-sm" style="max-width:240px" id="studSearch" placeholder="Search name / roll / class…">
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead><tr><th>Photo</th><th>Name</th><th>Roll</th><th>Class</th><th>Samples</th><th></th></tr></thead>
+          <tbody id="studBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== RECORDS ===== -->
+  <div class="tab-pane-x d-none" id="tabRecords">
+    <div class="card p-3">
+      <div class="d-flex gap-2 flex-wrap align-items-end mb-3 no-print">
+        <div><label class="form-label small mb-0">Date</label><input type="date" class="form-control" id="recDate"></div>
+        <div><label class="form-label small mb-0">Class</label><select class="form-select" id="recClass"><option value="">All</option></select></div>
+        <button class="btn btn-outline-primary" id="btnExport"><i class="bi bi-download"></i> Day CSV</button>
+        <button class="btn btn-outline-success" id="btnExportMonth"><i class="bi bi-calendar-month"></i> Month CSV</button>
+        <button class="btn btn-outline-secondary" onclick="window.print()"><i class="bi bi-printer"></i> Print</button>
+      </div>
+      <h6 id="recTitle"></h6>
+      <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle">
+          <thead><tr><th>#</th><th>Name</th><th>Roll</th><th>Class</th><th>Status</th><th>Time</th><th>Camera</th><th class="no-print">Manual</th></tr></thead>
+          <tbody id="recBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SETTINGS ===== -->
+  <div class="tab-pane-x d-none" id="tabSettings">
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <div class="card p-3">
+          <h6>Recognition</h6>
+          <label class="form-label small">Match threshold (lower = stricter): <b id="thrVal"></b></label>
+          <input type="range" class="form-range" min="0.35" max="0.7" step="0.01" id="setThr">
+          <label class="form-label small mt-2">Confirm after N consecutive matching frames (reduces false marks)</label>
+          <input type="number" class="form-control" id="setConfirm" min="1" max="6">
+          <label class="form-label small mt-2">Detector size (bigger finds smaller/farther faces but is slower)</label>
+          <select class="form-select" id="setDet"><option>320</option><option>416</option><option>512</option><option>608</option></select>
+          <label class="form-label small mt-2">Late after (time)</label>
+          <input type="time" class="form-control" id="setLate">
+          <label class="form-label small mt-2">School / Institute name (for reports)</label>
+          <input class="form-control" id="setSchool">
+          <label class="form-label small mt-2">Admin PIN (needed to delete data)</label>
+          <input class="form-control" id="setPin" type="password">
+          <div class="form-check form-switch mt-3"><input class="form-check-input" type="checkbox" id="setAuto"><label class="form-check-label small" for="setAuto">Auto-start scanning when this page opens (kiosk mode)</label></div>
+          <hr>
+          <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="setFallback"><label class="form-check-label small" for="setFallback">If IP cameras are offline, switch to laptop / mobile camera automatically</label></div>
+          <label class="form-label small mt-2">Fallback camera</label>
+          <select class="form-select" id="setFacing">
+            <option value="user">Laptop webcam / phone front camera</option>
+            <option value="environment">Phone back camera</option>
+          </select>
+          <div class="form-text">The fallback starts after the IP cameras have been offline for about 8 seconds, and stops by itself when an IP camera reconnects. Phone cameras only work when this page is opened over HTTPS (or localhost), and the browser will ask for camera permission.</div>
+          <button class="btn btn-primary mt-3" id="btnSaveSettings">Save settings</button>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="card p-3 mb-3">
+          <h6>Google Sheets sync (optional)</h6>
+          <label class="form-label small">Apps Script Web App URL</label>
+          <input class="form-control" id="setGas" placeholder="https://script.google.com/macros/s/.../exec">
+          <div class="form-text">When set, each attendance mark and new student is also sent to your Google Sheet.</div>
+          <button class="btn btn-outline-primary btn-sm mt-2" id="btnSyncAll">Push all records now</button>
+          <details class="mt-3">
+            <summary class="small">Google Apps Script code</summary>
+<pre class="small bg-light p-2 mt-2" style="max-height:260px;overflow:auto">function doPost(e) {
+  var d = JSON.parse(e.postData.contents);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  function sheet(n, h) {
+    var s = ss.getSheetByName(n) || ss.insertSheet(n);
+    if (s.getLastRow() === 0) s.appendRow(h);
+    return s;
+  }
+  if (d.action === 'attendance') {
+    var s = sheet('Attendance', ['Date','Time','Roll','Name','Class','Status','Camera']);
+    d.records.forEach(function (r) {
+      s.appendRow([r.date, r.time, r.roll, r.name, r.cls, r.status, r.cam]);
+    });
+  } else if (d.action === 'student') {
+    var s2 = sheet('Students', ['Roll','Name','Class','Section']);
+    s2.appendRow([d.roll, d.name, d.cls, d.section]);
+  }
+  return ContentService.createTextOutput('OK');
+}</pre>
+          </details>
+        </div>
+        <div class="card p-3">
+          <h6>Backup &amp; data</h6>
+          <div class="d-flex gap-2 flex-wrap">
+            <button class="btn btn-outline-secondary btn-sm" id="btnBackup"><i class="bi bi-cloud-download"></i> Backup JSON</button>
+            <label class="btn btn-outline-secondary btn-sm mb-0"><i class="bi bi-cloud-upload"></i> Restore<input type="file" accept=".json" id="fileRestore" hidden></label>
+            <button class="btn btn-outline-danger btn-sm" id="btnWipeRec">Clear attendance records</button>
+          </div>
+          <div class="form-text mt-2">Data (students, cameras, records) is stored in this browser’s localStorage on this PC. Take regular backups. Camera URLs may contain passwords, so keep backup files private.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index:3000"><div id="toastBox"></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/dist/face-api.js"></script>
+<script>
+(() => {
+'use strict';
+
+/* ================= STORAGE ================= */
+const KEY = { students:'fas_students', records:'fas_records', settings:'fas_settings', cameras:'fas_cameras' };
+const DEFAULTS = { threshold:0.5, lateAfter:'08:30', school:'My School', pin:'1234', gas:'', confirm:2, detSize:416, autoStart:false, fallback:true, fallbackFacing:'user' };
+const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+
+let students = load(KEY.students, []);   // {id,name,roll,cls,section,photo,descriptors}
+let records  = load(KEY.records, []);    // {id,studentId,date,time,status,method,cam}
+let cameras  = load(KEY.cameras, []);    // {id,name,type,url,interval,enabled}
+let settings = Object.assign({}, DEFAULTS, load(KEY.settings, {}));
+
+/* ================= HELPERS ================= */
+const $ = id => document.getElementById(id);
+const pad = n => String(n).padStart(2,'0');
+const todayStr = (d=new Date()) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const timeStr = (d=new Date()) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const maskUrl = u => String(u || '').replace(/\/\/([^\/@:]+):([^@\/]+)@/, '//$1:***@');
+const csvCell = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
+
+function toast(msg, type='success') {
+  const el = document.createElement('div');
+  el.className = `toast align-items-center text-bg-${type} border-0 show mb-2`;
+  el.innerHTML = `<div class="d-flex"><div class="toast-body">${esc(msg)}</div></div>`;
+  $('toastBox').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+function beep() {
+  try {
+    const c = new (window.AudioContext || window.webkitAudioContext)();
+    const o = c.createOscillator(), g = c.createGain();
+    o.connect(g); g.connect(c.destination); o.frequency.value = 880; g.gain.value = 0.08;
+    o.start(); setTimeout(() => { o.stop(); c.close(); }, 140);
+  } catch {}
+}
+function askPin() {
+  const p = prompt('Enter admin PIN:');
+  if (p === null) return false;
+  if (p !== settings.pin) { toast('Wrong PIN', 'danger'); return false; }
+  return true;
+}
+function downloadFile(name, text, type='text/csv') {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type}));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+function setPlaceholder(stage, html) { stage.innerHTML = `<div class="ph">${html}</div>`; }
+const dimsOf = el => ({ width: el.videoWidth || el.naturalWidth || 0, height: el.videoHeight || el.naturalHeight || 0 });
+
+/* ================= GOOGLE SHEETS SYNC ================= */
+async function gasPost(payload) {
+  if (!settings.gas) return;
+  try {
+    await fetch(settings.gas, { method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(payload) });
+  } catch (e) { console.warn('Sync failed', e); }
+}
+const recForSync = r => {
+  const s = students.find(x => x.id === r.studentId) || {};
+  return { date:r.date, time:r.time, roll:s.roll, name:s.name, cls:`${s.cls||''} ${s.section||''}`.trim(), status:r.status, cam:r.cam || '' };
+};
+
+/* ================= TABS ================= */
+document.querySelectorAll('#tabs .nav-link').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('#tabs .nav-link').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.tab-pane-x').forEach(p => p.classList.add('d-none'));
+  $(btn.dataset.tab).classList.remove('d-none');
+  const t = btn.dataset.tab;
+  if (t !== 'tabRegister') stopReg();
+  if (t !== 'tabCameras') stopTest();
+  if (t === 'tabStudents') renderStudents();
+  if (t === 'tabRecords') renderRecords();
+  if (t === 'tabAttendance') renderToday();
+  if (t === 'tabCameras') renderCameras();
+  if (t === 'tabRegister') renderRegSources();
+}));
+setInterval(() => { $('clock').textContent = new Date().toLocaleString(); }, 1000);
+setInterval(renderToday, 60000);
+
+/* ================= MODELS ================= */
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/';
+let modelsReady = false;
+async function loadModels() {
+  try {
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+    ]);
+    modelsReady = true;
+    $('loader').remove();
+    if (settings.autoStart && students.length && cameras.some(c => c.enabled)) startAll();
+  } catch (e) {
+    $('loaderText').innerHTML = 'Failed to load models. Check your internet connection and reload.<br><small>' + esc(e.message) + '</small>';
+  }
+}
+const detOpts = () => new faceapi.TinyFaceDetectorOptions({ inputSize: +settings.detSize || 416, scoreThreshold: 0.4 });
+
+/* ================= VIDEO SOURCES (webcam / MJPEG / snapshot / HLS) ================= */
+function mkVideo() {
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.autoplay = true; v.className = 'media'; v.crossOrigin = 'anonymous';
+  return v;
+}
+function until(cond, ms, msg) {
+  return new Promise((res, rej) => {
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (cond()) { clearInterval(iv); res(); }
+      else if (Date.now() - t0 > ms) { clearInterval(iv); rej(new Error(msg)); }
+    }, 100);
+  });
+}
+const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+
+/** Opens a source inside `stage`. Returns { el, dead, stop(), error } */
+async function openSource(cam, stage) {
+  stage.innerHTML = '';
+  if (cam.type === 'webcam') {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('Webcam needs HTTPS or localhost');
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:cam.facing || 'user' }, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+    const v = mkVideo(); v.srcObject = stream; stage.appendChild(v);
+    const obj = { el:v, dead:false, stop() { stream.getTracks().forEach(t => t.stop()); v.srcObject = null; v.remove(); } };
+    try { await v.play(); await until(() => v.videoWidth > 0, 6000, 'Webcam gave no video'); }
+    catch (e) { obj.stop(); throw e; }
+    return obj;
+  }
+
+  if (cam.type === 'mjpeg') {
+    const img = new Image(); img.crossOrigin = 'anonymous'; img.className = 'media';
+    stage.appendChild(img);
+    const obj = { el:img, dead:false, stop() { img.onload = img.onerror = null; img.src = BLANK; img.remove(); } };
+    await new Promise((res, rej) => {
+      const to = setTimeout(() => { obj.stop(); rej(new Error('Timed out waiting for stream')); }, 12000);
+      img.onload = () => { clearTimeout(to); res(); };
+      img.onerror = () => { clearTimeout(to); obj.stop(); rej(new Error('Cannot load stream. Check URL, network, CORS and http/https mixed content.')); };
+      img.src = cam.url;
+    });
+    img.onerror = () => { obj.dead = true; };
+    return obj;
+  }
+
+  if (cam.type === 'snapshot') {
+    const img = new Image(); img.className = 'media'; stage.appendChild(img);
+    let last = null, busy = false, fails = 0, timer = null;
+    const obj = { el:img, dead:false, error:'', stop() { clearInterval(timer); img.onload = img.onerror = null; img.remove(); if (last) URL.revokeObjectURL(last); } };
+    const tick = async () => {
+      if (busy) return true; busy = true;
+      try {
+        const u = cam.url + (cam.url.includes('?') ? '&' : '?') + '_t=' + Date.now();
+        const r = await fetch(u, { cache:'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const blobUrl = URL.createObjectURL(await r.blob());
+        await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('Not a valid image')); img.src = blobUrl; });
+        if (last) URL.revokeObjectURL(last);
+        last = blobUrl; fails = 0; obj.dead = false; return true;
+      } catch (e) {
+        obj.error = (e instanceof TypeError) ? 'Fetch blocked (CORS) or camera unreachable' : e.message;
+        if (++fails >= 5) obj.dead = true;
+        return false;
+      } finally { busy = false; }
+    };
+    if (!(await tick())) { const m = obj.error; obj.stop(); throw new Error(m); }
+    timer = setInterval(tick, Math.max(300, +cam.interval || 1000));
+    return obj;
+  }
+
+  if (cam.type === 'hls') {
+    const v = mkVideo(); stage.appendChild(v);
+    const obj = { el:v, dead:false, hls:null, stop() { try { obj.hls?.destroy(); } catch {} v.removeAttribute('src'); v.load(); v.remove(); } };
+    if (window.Hls && Hls.isSupported()) {
+      const hls = new Hls({ lowLatencyMode:true, liveSyncDurationCount:2 });
+      obj.hls = hls;
+      hls.on(Hls.Events.ERROR, (e, d) => { if (d.fatal) obj.dead = true; });
+      hls.loadSource(cam.url); hls.attachMedia(v);
+    } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+      v.src = cam.url;
+    } else { obj.stop(); throw new Error('HLS not supported in this browser'); }
+    try { v.play().catch(() => {}); await until(() => v.videoWidth > 0, 15000, 'No video from HLS stream'); }
+    catch (e) { obj.stop(); throw e; }
+    return obj;
+  }
+  throw new Error('Unknown camera type');
+}
+
+/** Can the browser read pixels from this element? (CORS check) */
+function canReadPixels(el) {
+  try {
+    const c = document.createElement('canvas'); c.width = c.height = 8;
+    const x = c.getContext('2d'); x.drawImage(el, 0, 0, 8, 8); x.getImageData(0, 0, 8, 8);
+    return true;
+  } catch { return false; }
+}
+
+/* ================= CAMERAS TAB ================= */
+const URL_HINTS = {
+  mjpeg: 'Example: http://192.168.1.50:1984/api/stream.mjpeg?src=gate1',
+  snapshot: 'Example: http://192.168.1.50:1984/api/frame.jpeg?src=gate1',
+  hls: 'Example: http://192.168.1.50:1984/api/stream.m3u8?src=gate1',
+  webcam: ''
+};
+function syncCamForm() {
+  const t = $('cType').value;
+  $('cUrlWrap').classList.toggle('d-none', t === 'webcam');
+  $('cIntWrap').classList.toggle('d-none', t !== 'snapshot');
+  $('cUrlHint').textContent = URL_HINTS[t];
+}
+$('cType').onchange = syncCamForm;
+
+function clearCamForm() {
+  $('cId').value = ''; $('cName').value = ''; $('cUrl').value = ''; $('cInterval').value = 1000;
+  $('cType').value = 'mjpeg'; $('cEnabled').checked = true; $('camFormTitle').textContent = 'Add camera';
+  syncCamForm();
+}
+$('btnCancelCam').onclick = clearCamForm;
+
+$('btnSaveCam').onclick = () => {
+  const name = $('cName').value.trim(), type = $('cType').value, url = $('cUrl').value.trim();
+  if (!name) return toast('Camera name is required', 'warning');
+  if (type !== 'webcam' && !/^https?:\/\//i.test(url)) return toast('Enter an http:// or https:// URL (use go2rtc for RTSP cameras)', 'warning');
+  const cam = { id:$('cId').value || uid(), name, type, url:type === 'webcam' ? '' : url,
+    interval:+$('cInterval').value || 1000, enabled:$('cEnabled').checked };
+  const i = cameras.findIndex(c => c.id === cam.id);
+  if (i >= 0) cameras[i] = cam; else cameras.push(cam);
+  save(KEY.cameras, cameras); clearCamForm(); renderCameras(); renderRegSources();
+  toast('Camera saved');
+};
+
+function renderCameras() {
+  $('camCount').textContent = cameras.length;
+  $('camBody').innerHTML = cameras.length ? cameras.map(c => `<tr>
+    <td>${esc(c.name)}</td>
+    <td><span class="badge text-bg-secondary">${esc(c.type)}</span></td>
+    <td class="url-mask">${esc(maskUrl(c.url)) || '—'}</td>
+    <td><div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" data-en="${c.id}" ${c.enabled ? 'checked' : ''}></div></td>
+    <td class="text-end text-nowrap">
+      <button class="btn btn-sm btn-outline-primary" data-test="${c.id}">Test</button>
+      <button class="btn btn-sm btn-outline-secondary" data-edit="${c.id}"><i class="bi bi-pencil"></i></button>
+      <button class="btn btn-sm btn-outline-danger" data-del="${c.id}"><i class="bi bi-trash"></i></button>
+    </td></tr>`).join('') : '<tr><td colspan="5" class="text-muted text-center">No cameras yet.</td></tr>';
+  const body = $('camBody');
+  body.querySelectorAll('[data-en]').forEach(el => el.onchange = () => {
+    const c = cameras.find(x => x.id === el.dataset.en); c.enabled = el.checked; save(KEY.cameras, cameras);
+  });
+  body.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
+    const c = cameras.find(x => x.id === b.dataset.edit);
+    $('cId').value = c.id; $('cName').value = c.name; $('cType').value = c.type; $('cUrl').value = c.url;
+    $('cInterval').value = c.interval || 1000; $('cEnabled').checked = c.enabled; $('camFormTitle').textContent = 'Edit camera';
+    syncCamForm(); window.scrollTo({ top:0, behavior:'smooth' });
+  });
+  body.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    const c = cameras.find(x => x.id === b.dataset.del);
+    if (!askPin() || !confirm(`Delete camera "${c.name}"?`)) return;
+    cameras = cameras.filter(x => x.id !== c.id); save(KEY.cameras, cameras); renderCameras(); renderRegSources();
+  });
+  body.querySelectorAll('[data-test]').forEach(b => b.onclick = () => testCam(cameras.find(x => x.id === b.dataset.test)));
+}
+
+let testSrc = null;
+async function testCam(cam) {
+  stopTest();
+  const stage = $('testStage'), badge = $('testBadge');
+  setPlaceholder(stage, '<div class="spinner-border text-light"></div>');
+  badge.className = 'badge text-bg-warning'; badge.textContent = 'connecting…';
+  try {
+    testSrc = await openSource(cam, stage);
+    await sleep(600);
+    const ok = canReadPixels(testSrc.el);
+    const d = dimsOf(testSrc.el);
+    badge.className = 'badge text-bg-' + (ok ? 'success' : 'danger');
+    badge.textContent = ok ? `connected ${d.width}×${d.height} — pixels readable ✔` : 'connected, but CORS BLOCKED — face detection will not work';
+    if (!ok) toast('Stream plays but the browser may not read it. Enable CORS (go2rtc api.origin "*").', 'danger');
+  } catch (e) {
+    setPlaceholder(stage, esc(e.message));
+    badge.className = 'badge text-bg-danger'; badge.textContent = 'failed';
+  }
+}
+function stopTest() {
+  testSrc?.stop(); testSrc = null;
+  setPlaceholder($('testStage'), 'Press “Test” on a camera');
+  $('testBadge').className = 'badge text-bg-secondary'; $('testBadge').textContent = 'idle';
+}
+$('btnStopTest').onclick = stopTest;
+
+/* ================= ATTENDANCE (multi-camera) ================= */
+let matcher = null, scanning = false, wake = null;
+const live = new Map();                  // camId -> { cam, src, tile, canvas, badge, streaks, failedAt }
+const recentlySeen = new Map();
+
+function buildMatcher() {
+  const labeled = students.filter(s => s.descriptors?.length).map(s =>
+    new faceapi.LabeledFaceDescriptors(s.id, s.descriptors.map(d => new Float32Array(d))));
+  matcher = labeled.length ? new faceapi.FaceMatcher(labeled, settings.threshold) : null;
+}
+function setBadge(l, text, type) { l.badge.className = 'badge text-bg-' + type; l.badge.textContent = text; }
+
+function makeTile(cam, single) {
+  const col = document.createElement('div');
+  col.className = single ? 'col-12' : 'col-lg-6';
+  col.innerHTML = `<div class="card p-2"><div class="d-flex justify-content-between align-items-center mb-1">
+    <b class="small cam-name"></b><span class="badge text-bg-secondary">connecting</span></div><div class="stage"></div></div>`;
+  col.querySelector('.cam-name').textContent = cam.name;
+  return { col, stage:col.querySelector('.stage'), badge:col.querySelector('.badge') };
+}
+
+async function connectCam(l) {
+  try {
+    setBadge(l, 'connecting', 'secondary');
+    l.src = await openSource(l.cam, l.stage);
+    l.canvas = document.createElement('canvas'); l.stage.appendChild(l.canvas);
+    l.streaks.clear();
+    setBadge(l, 'live', 'success');
+  } catch (e) {
+    l.src = null; l.failedAt = Date.now();
+    setBadge(l, 'offline — retrying', 'danger');
+    setPlaceholder(l.stage, esc(e.message));
+  }
+}
+
+async function startAll() {
+  if (scanning) return;
+  if (!modelsReady) return toast('Models still loading', 'warning');
+  if (!students.length) return toast('Register at least one student first', 'warning');
+  const cams = cameras.filter(c => c.enabled);
+  if (!cams.length && !settings.fallback) return toast('Add and enable a camera in the Cameras tab', 'warning');
+  buildMatcher();
+  scanning = true;
+  $('btnStartAtt').disabled = true; $('btnStopAtt').disabled = false;
+  $('attStatus').textContent = `Scanning ${cams.length} camera(s)…`;
+  const grid = $('camGrid'); grid.innerHTML = '';
+  live.clear();
+  for (const cam of cams) {
+    const t = makeTile(cam, cams.length === 1);
+    grid.appendChild(t.col);
+    live.set(cam.id, { cam, stage:t.stage, col:t.col, badge:t.badge, src:null, canvas:null, streaks:new Map(), failedAt:0 });
+  }
+  try { wake = await navigator.wakeLock?.request('screen'); } catch {}
+  lastIpLiveAt = 0;
+  await Promise.all([...live.values()].map(connectCam));
+  loop();
+}
+
+/* ---- Fallback: laptop / mobile camera when no IP camera is working ---- */
+const FB_ID = '__fallback__';
+let lastIpLiveAt = 0;
+
+async function manageFallback() {
+  const ipLive = [...live.values()].some(l => !l.fallback && l.src && !l.src.dead);
+  const fb = live.get(FB_ID);
+  if (ipLive) {
+    lastIpLiveAt = Date.now();
+    if (fb) { removeFallback(); toast('IP camera is back online — device camera stopped', 'info'); }
+    return;
+  }
+  if (!settings.fallback) { if (fb) removeFallback(); return; }
+  if (!fb && Date.now() - lastIpLiveAt > 8000) await addFallback();
+}
+
+async function addFallback() {
+  const cam = { id:FB_ID, name:'Device camera (fallback)', type:'webcam', facing:settings.fallbackFacing || 'user' };
+  const t = makeTile(cam, live.size === 0);
+  $('camGrid').appendChild(t.col);
+  const l = { cam, stage:t.stage, col:t.col, badge:t.badge, src:null, canvas:null, streaks:new Map(), failedAt:0, fallback:true };
+  live.set(FB_ID, l);
+  $('attStatus').textContent = 'IP cameras offline — using the device camera.';
+  toast('IP cameras offline — switched to device camera', 'warning');
+  await connectCam(l);
+  if (!l.src) toast('Device camera failed: allow camera permission (phones need HTTPS)', 'danger');
+}
+
+function removeFallback() {
+  const l = live.get(FB_ID); if (!l) return;
+  l.src?.stop(); l.col?.remove(); live.delete(FB_ID);
+  $('attStatus').textContent = `Scanning ${live.size} camera(s)…`;
+}
+
+async function stopAll() {
+  scanning = false;
+  await sleep(50);
+  live.forEach(l => l.src?.stop());
+  live.clear();
+  try { await wake?.release(); } catch {} wake = null;
+  $('camGrid').innerHTML = '<div class="col-12"><div class="card p-3"><div class="stage"><div class="ph"><i class="bi bi-camera-video-off fs-1"></i><div>Scanner is off</div></div></div></div></div>';
+  $('btnStartAtt').disabled = false; $('btnStopAtt').disabled = true;
+  $('attStatus').textContent = 'Scanner stopped.';
+}
+
+async function loop() {
+  while (scanning) {
+    await manageFallback();
+    for (const l of [...live.values()]) {
+      if (!scanning) break;
+      if (!l.src) {                               // reconnect every 15 s
+        if (Date.now() - l.failedAt > 15000) await connectCam(l);
+        continue;
+      }
+      if (l.src.dead) {
+        l.src.stop(); l.src = null; l.failedAt = Date.now();
+        setBadge(l, 'offline — retrying', 'danger'); setPlaceholder(l.stage, 'Connection lost');
+        continue;
+      }
+      await scanCam(l);
+    }
+    await sleep(120);
+  }
+}
+
+async function scanCam(l) {
+  const el = l.src.el, d = dimsOf(el);
+  if (!d.width || (el instanceof HTMLImageElement && !el.complete)) return;
+  try {
+    const dets = await faceapi.detectAllFaces(el, detOpts()).withFaceLandmarks().withFaceDescriptors();
+    const cv = l.canvas;
+    if (cv.width !== d.width || cv.height !== d.height) { cv.width = d.width; cv.height = d.height; }
+    cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+    const fontSize = Math.max(14, Math.round(d.height / 28));
+    const seen = new Set();
+    dets.forEach(det => {
+      const m = matcher.findBestMatch(det.descriptor);
+      const stu = m.label !== 'unknown' ? students.find(s => s.id === m.label) : null;
+      let label = 'Unknown', color = '#dc3545';
+      if (stu) {
+        label = `${stu.name} ${Math.round((1 - m.distance) * 100)}%`; color = '#198754';
+        seen.add(stu.id);
+        const n = (l.streaks.get(stu.id) || 0) + 1; l.streaks.set(stu.id, n);
+        if (n >= settings.confirm) markPresent(stu, l.cam.name);
+      }
+      new faceapi.draw.DrawBox(det.detection.box, { label, boxColor:color, lineWidth:2,
+        drawLabelOptions:new faceapi.draw.DrawTextFieldOptions({ fontSize }) }).draw(cv);
+    });
+    for (const k of [...l.streaks.keys()]) if (!seen.has(k)) l.streaks.delete(k);
+    if (l.badge.textContent !== 'live') setBadge(l, 'live', 'success');
+  } catch (e) {
+    if (e.name === 'SecurityError' || /tainted|insecure/i.test(e.message)) {
+      setBadge(l, 'CORS blocked', 'danger');
+      $('attStatus').textContent = `"${l.cam.name}": browser cannot read this stream (CORS). Use go2rtc with api.origin "*".`;
+      await sleep(2000);
+    } else console.error(e);
+  }
+}
+
+function markPresent(stu, camName = '', method = 'face') {
+  const date = todayStr();
+  const existing = records.find(r => r.studentId === stu.id && r.date === date);
+  const now = Date.now();
+  if (existing) { recentlySeen.set(stu.id, now); return; }
+  const t = new Date();
+  const isLate = timeStr(t).slice(0, 5) > settings.lateAfter;
+  const rec = { id:uid(), studentId:stu.id, date, time:timeStr(t), status:isLate ? 'Late' : 'Present', method, cam:camName };
+  records.push(rec); save(KEY.records, records);
+  recentlySeen.set(stu.id, now);
+  beep(); toast(`${stu.name} marked ${rec.status} (${camName})`, isLate ? 'warning' : 'success');
+  $('attStatus').textContent = `✔ ${stu.name} marked ${rec.status} at ${rec.time} — ${camName}`;
+  renderToday();
+  gasPost({ action:'attendance', records:[recForSync(rec)] });
+}
+
+function renderToday() {
+  const date = todayStr();
+  const todays = records.filter(r => r.date === date).sort((a, b) => b.time.localeCompare(a.time));
+  const present = todays.filter(r => students.some(s => s.id === r.studentId)).length;
+  $('stTotal').textContent = students.length;
+  $('stPresent').textContent = present;
+  $('stAbsent').textContent = Math.max(0, students.length - present);
+  $('todayLog').innerHTML = todays.length ? todays.map(r => {
+    const s = students.find(x => x.id === r.studentId); if (!s) return '';
+    return `<div class="log-item ${r.status === 'Late' ? 'late' : ''} bg-light rounded p-2 mb-2 d-flex align-items-center gap-2">
+      <img class="thumb" src="${s.photo || ''}" alt="">
+      <div class="flex-grow-1"><div class="fw-semibold">${esc(s.name)}</div><div class="small text-muted">${esc(s.cls)} ${esc(s.section)} · Roll ${esc(s.roll)}</div><div class="small text-muted"><i class="bi bi-camera"></i> ${esc(r.cam || 'manual')}</div></div>
+      <div class="text-end"><span class="badge ${r.status === 'Late' ? 'text-bg-warning' : 'text-bg-success'}">${r.status}</span><div class="small text-muted">${r.time}</div></div>
+    </div>`;
+  }).join('') : '<div class="text-muted small">No check-ins yet today.</div>';
+}
+$('btnStartAtt').onclick = startAll;
+$('btnStopAtt').onclick = stopAll;
+
+/* ================= REGISTRATION ================= */
+let samples = [], regSrc = null, regCanvas = null, regTimer = null, regBusy = false;
+const MAX_SAMPLES = 5;
+
+function renderRegSources() {
+  const cur = $('regSource').value;
+  $('regSource').innerHTML = '<option value="webcam">Local webcam</option>' +
+    cameras.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  if ([...$('regSource').options].some(o => o.value === cur)) $('regSource').value = cur;
+}
+
+async function startReg() {
+  if (!modelsReady) return toast('Models still loading', 'warning');
+  stopReg();
+  const v = $('regSource').value;
+  const cam = v === 'webcam' ? { type:'webcam', name:'Local webcam' } : cameras.find(c => c.id === v);
+  const stage = $('regStage');
+  setPlaceholder(stage, '<div class="spinner-border text-light"></div>');
+  try { regSrc = await openSource(cam, stage); }
+  catch (e) { setPlaceholder(stage, esc(e.message)); return toast(e.message, 'danger'); }
+  regCanvas = document.createElement('canvas'); stage.appendChild(regCanvas);
+  $('btnStartReg').disabled = true; $('btnStopReg').disabled = false; $('btnCapture').disabled = false;
+  regTimer = setInterval(async () => {
+    if (regBusy || !regSrc) return; regBusy = true;
+    try {
+      const d = dimsOf(regSrc.el); if (!d.width) return;
+      const dets = await faceapi.detectAllFaces(regSrc.el, detOpts());
+      if (!regCanvas) return;
+      regCanvas.width = d.width; regCanvas.height = d.height;
+      regCanvas.getContext('2d').clearRect(0, 0, d.width, d.height);
+      dets.forEach(x => new faceapi.draw.DrawBox(x.box, { label: dets.length > 1 ? 'Multiple faces!' : 'Face OK',
+        boxColor: dets.length > 1 ? '#dc3545' : '#0d6efd', lineWidth:2,
+        drawLabelOptions:new faceapi.draw.DrawTextFieldOptions({ fontSize:Math.max(14, Math.round(d.height / 28)) }) }).draw(regCanvas));
+    } catch (e) { /* ignore */ } finally { regBusy = false; }
+  }, 450);
+}
+function stopReg() {
+  clearInterval(regTimer); regTimer = null;
+  regSrc?.stop(); regSrc = null; regCanvas = null;
+  setPlaceholder($('regStage'), '<i class="bi bi-camera-video-off fs-1"></i><div>Camera is off</div>');
+  $('btnStartReg').disabled = false; $('btnStopReg').disabled = true; $('btnCapture').disabled = true;
+}
+
+async function captureSample() {
+  if (!regSrc) return;
+  if (samples.length >= MAX_SAMPLES) return toast(`Maximum ${MAX_SAMPLES} samples`, 'warning');
+  const el = regSrc.el;
+  try {
+    const dets = await faceapi.detectAllFaces(el, detOpts()).withFaceLandmarks().withFaceDescriptors();
+    if (dets.length === 0) return toast('No face detected', 'danger');
+    if (dets.length > 1) return toast('Only one face allowed', 'danger');
+    const b = dets[0].detection.box, d = dimsOf(el), p = 0.25;
+    const sx = Math.max(0, b.x - b.width * p), sy = Math.max(0, b.y - b.height * p);
+    const sw = Math.min(d.width - sx, b.width * (1 + 2 * p)), sh = Math.min(d.height - sy, b.height * (1 + 2 * p));
+    const cv = document.createElement('canvas'); cv.width = 120; cv.height = 120;
+    cv.getContext('2d').drawImage(el, sx, sy, sw, sh, 0, 0, 120, 120);
+    samples.push({ descriptor:Array.from(dets[0].descriptor), photo:cv.toDataURL('image/jpeg', 0.7) });
+    renderSamples();
+  } catch (e) { toast('Capture failed: ' + e.message, 'danger'); }
+}
+function renderSamples() {
+  $('sampleCount').textContent = `${samples.length} / ${MAX_SAMPLES} samples`;
+  $('sampleThumbs').innerHTML = samples.map((s, i) =>
+    `<div class="position-relative"><img class="thumb" src="${s.photo}"><button class="btn btn-sm btn-danger position-absolute top-0 end-0 p-0 px-1" data-del="${i}" style="line-height:1">×</button></div>`).join('');
+  $('sampleThumbs').querySelectorAll('[data-del]').forEach(b => b.onclick = () => { samples.splice(+b.dataset.del, 1); renderSamples(); });
+}
+function checkDuplicateFace(descriptor) {
+  const labeled = students.filter(s => s.descriptors?.length).map(s => new faceapi.LabeledFaceDescriptors(s.id, s.descriptors.map(d => new Float32Array(d))));
+  if (!labeled.length) return null;
+  const m = new faceapi.FaceMatcher(labeled, 0.45).findBestMatch(new Float32Array(descriptor));
+  return m.label !== 'unknown' ? students.find(s => s.id === m.label) : null;
+}
+function saveStudent() {
+  const name = $('rName').value.trim(), roll = $('rRoll').value.trim();
+  if (!name || !roll) return toast('Name and roll number are required', 'warning');
+  if (students.some(s => s.roll.toLowerCase() === roll.toLowerCase())) return toast('Roll number already exists', 'danger');
+  if (samples.length < 3) return toast('Capture at least 3 samples', 'warning');
+  const dup = checkDuplicateFace(samples[0].descriptor);
+  if (dup && !confirm(`This face looks like "${dup.name}" (Roll ${dup.roll}). Save anyway?`)) return;
+  const stu = { id:uid(), name, roll, cls:$('rClass').value.trim(), section:$('rSection').value.trim(),
+    photo:samples[0].photo, descriptors:samples.map(s => s.descriptor), created:new Date().toISOString() };
+  students.push(stu); save(KEY.students, students);
+  ['rName','rRoll','rClass','rSection'].forEach(i => $(i).value = '');
+  samples = []; renderSamples();
+  if (scanning) buildMatcher();
+  toast(`${name} registered`);
+  gasPost({ action:'student', roll:stu.roll, name:stu.name, cls:stu.cls, section:stu.section });
+}
+$('btnStartReg').onclick = startReg;
+$('btnStopReg').onclick = stopReg;
+$('btnCapture').onclick = captureSample;
+$('btnSave').onclick = saveStudent;
+
+/* ================= STUDENTS ================= */
+function renderStudents() {
+  const q = $('studSearch').value.trim().toLowerCase();
+  const list = students.filter(s => !q || `${s.name} ${s.roll} ${s.cls} ${s.section}`.toLowerCase().includes(q));
+  $('studCount').textContent = students.length;
+  $('studBody').innerHTML = list.length ? list.map(s => `<tr>
+    <td><img class="thumb" src="${s.photo || ''}"></td>
+    <td>${esc(s.name)}</td><td>${esc(s.roll)}</td><td>${esc(s.cls)} ${esc(s.section)}</td>
+    <td>${s.descriptors?.length || 0}</td>
+    <td class="text-end"><button class="btn btn-sm btn-outline-danger" data-del="${s.id}"><i class="bi bi-trash"></i></button></td></tr>`).join('')
+    : '<tr><td colspan="6" class="text-muted text-center">No students found.</td></tr>';
+  $('studBody').querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    const s = students.find(x => x.id === b.dataset.del);
+    if (!s || !askPin()) return;
+    if (!confirm(`Delete ${s.name} and their attendance records?`)) return;
+    students = students.filter(x => x.id !== s.id);
+    records = records.filter(r => r.studentId !== s.id);
+    save(KEY.students, students); save(KEY.records, records);
+    if (scanning) buildMatcher();
+    renderStudents(); toast('Student deleted', 'secondary');
+  });
+}
+$('studSearch').oninput = renderStudents;
+
+/* ================= RECORDS ================= */
+function renderRecords() {
+  if (!$('recDate').value) $('recDate').value = todayStr();
+  const date = $('recDate').value;
+  const classes = [...new Set(students.map(s => s.cls).filter(Boolean))].sort();
+  const cur = $('recClass').value;
+  $('recClass').innerHTML = '<option value="">All</option>' + classes.map(c => `<option ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  const cls = $('recClass').value;
+  const list = students.filter(s => !cls || s.cls === cls).sort((a, b) => a.roll.localeCompare(b.roll, undefined, { numeric:true }));
+  let p = 0, l = 0, a = 0;
+  $('recBody').innerHTML = list.map((s, i) => {
+    const r = records.find(x => x.studentId === s.id && x.date === date);
+    const status = r ? r.status : 'Absent';
+    if (status === 'Present') p++; else if (status === 'Late') l++; else a++;
+    const c = status === 'Present' ? 'success' : status === 'Late' ? 'warning' : 'danger';
+    return `<tr><td>${i + 1}</td><td>${esc(s.name)}</td><td>${esc(s.roll)}</td><td>${esc(s.cls)} ${esc(s.section)}</td>
+      <td><span class="badge text-bg-${c}">${status}</span></td><td>${r ? r.time : '—'}</td><td>${r ? esc(r.cam || 'manual') : '—'}</td>
+      <td class="no-print"><div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-success" data-set="Present" data-id="${s.id}">P</button>
+        <button class="btn btn-outline-warning" data-set="Late" data-id="${s.id}">L</button>
+        <button class="btn btn-outline-danger" data-set="Absent" data-id="${s.id}">A</button></div></td></tr>`;
+  }).join('') || '<tr><td colspan="8" class="text-center text-muted">No students.</td></tr>';
+  $('recTitle').textContent = `${settings.school} — Attendance ${date}${cls ? ' — Class ' + cls : ''}  |  Present: ${p}  Late: ${l}  Absent: ${a}`;
+  $('recBody').querySelectorAll('[data-set]').forEach(b => b.onclick = () => {
+    const sid = b.dataset.id, st = b.dataset.set;
+    let r = records.find(x => x.studentId === sid && x.date === date);
+    if (st === 'Absent') records = records.filter(x => x !== r);
+    else if (r) { r.status = st; r.method = 'manual'; }
+    else { r = { id:uid(), studentId:sid, date, time:timeStr(), status:st, method:'manual', cam:'manual' }; records.push(r); }
+    save(KEY.records, records); renderRecords(); renderToday();
+    if (r && st !== 'Absent') gasPost({ action:'attendance', records:[recForSync(r)] });
+  });
+}
+$('recDate').onchange = renderRecords;
+$('recClass').onchange = renderRecords;
+
+$('btnExport').onclick = () => {
+  const date = $('recDate').value, cls = $('recClass').value;
+  const rows = [['Date','Roll','Name','Class','Section','Status','Time','Camera']];
+  students.filter(s => !cls || s.cls === cls).forEach(s => {
+    const r = records.find(x => x.studentId === s.id && x.date === date);
+    rows.push([date, s.roll, s.name, s.cls, s.section, r ? r.status : 'Absent', r ? r.time : '', r ? (r.cam || 'manual') : '']);
+  });
+  downloadFile(`attendance_${date}.csv`, rows.map(r => r.map(csvCell).join(',')).join('\n'));
+};
+$('btnExportMonth').onclick = () => {
+  const month = ($('recDate').value || todayStr()).slice(0, 7);
+  const days = [...new Set(records.filter(r => r.date.startsWith(month)).map(r => r.date))].sort();
+  if (!days.length) return toast('No records for this month', 'warning');
+  const rows = [['Roll','Name','Class', ...days.map(d => d.slice(8)), 'Present','Late','Absent']];
+  students.forEach(s => {
+    let p = 0, l = 0, a = 0;
+    const cells = days.map(d => {
+      const r = records.find(x => x.studentId === s.id && x.date === d);
+      if (!r) { a++; return 'A'; }
+      if (r.status === 'Late') { l++; return 'L'; }
+      p++; return 'P';
+    });
+    rows.push([s.roll, s.name, `${s.cls} ${s.section}`.trim(), ...cells, p, l, a]);
+  });
+  downloadFile(`attendance_${month}.csv`, rows.map(r => r.map(csvCell).join(',')).join('\n'));
+};
+
+/* ================= SETTINGS ================= */
+function loadSettingsUI() {
+  $('setThr').value = settings.threshold; $('thrVal').textContent = settings.threshold;
+  $('setConfirm').value = settings.confirm; $('setDet').value = String(settings.detSize);
+  $('setLate').value = settings.lateAfter; $('setSchool').value = settings.school;
+  $('setPin').value = settings.pin; $('setGas').value = settings.gas; $('setAuto').checked = !!settings.autoStart;
+  $('setFallback').checked = !!settings.fallback; $('setFacing').value = settings.fallbackFacing || 'user';
+}
+$('setThr').oninput = e => $('thrVal').textContent = e.target.value;
+$('btnSaveSettings').onclick = () => {
+  settings = { threshold:parseFloat($('setThr').value), confirm:Math.min(6, Math.max(1, +$('setConfirm').value || 2)),
+    detSize:+$('setDet').value, lateAfter:$('setLate').value || '08:30', school:$('setSchool').value.trim() || 'My School',
+    pin:$('setPin').value || '1234', gas:$('setGas').value.trim(), autoStart:$('setAuto').checked,
+    fallback:$('setFallback').checked, fallbackFacing:$('setFacing').value };
+  save(KEY.settings, settings);
+  if (scanning) buildMatcher();
+  toast('Settings saved');
+};
+$('btnSyncAll').onclick = async () => {
+  if (!settings.gas) return toast('Set the Web App URL and save first', 'warning');
+  await gasPost({ action:'attendance', records:records.map(recForSync) });
+  toast('Records sent to Google Sheet');
+};
+$('btnBackup').onclick = () => downloadFile(`attendance_backup_${todayStr()}.json`, JSON.stringify({ students, records, cameras, settings }), 'application/json');
+$('fileRestore').onchange = e => {
+  const f = e.target.files[0]; if (!f || !askPin()) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      const d = JSON.parse(rd.result);
+      if (!Array.isArray(d.students) || !Array.isArray(d.records)) throw new Error('Invalid backup file');
+      students = d.students; records = d.records; cameras = d.cameras || cameras;
+      settings = Object.assign({}, DEFAULTS, d.settings || {});
+      save(KEY.students, students); save(KEY.records, records); save(KEY.cameras, cameras); save(KEY.settings, settings);
+      loadSettingsUI(); renderToday(); renderCameras(); renderRegSources(); toast('Backup restored');
+    } catch (err) { toast(err.message, 'danger'); }
+  };
+  rd.readAsText(f); e.target.value = '';
+};
+$('btnWipeRec').onclick = () => {
+  if (!askPin() || !confirm('Delete ALL attendance records? Students are kept.')) return;
+  records = []; save(KEY.records, records); renderToday(); toast('Records cleared', 'secondary');
+};
+
+/* ================= INIT ================= */
+syncCamForm(); loadSettingsUI(); renderToday(); renderCameras(); renderRegSources(); loadModels();
+})();
+</script>
+</body>
+</html>
